@@ -10,25 +10,26 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        
+        cache: 'npm'
+
     - name: Setup Java JDK
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
-        
+
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-      
+
     - name: Cache Gradle dependencies
       uses: actions/cache@v3
       with:
@@ -43,16 +44,20 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ~/.npm
-        key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         restore-keys: |
           ${{ runner.os }}-node-
           
     - name: Install dependencies
-      run: npm install
-      
+      run: |
+        npm ci
+        echo "Verifying React Native installation..."
+        ls -la node_modules/react-native/android
+
     - name: Create local.properties
       run: |
         echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+        cat android/local.properties
         
     - name: Generate keystore
       run: |
@@ -61,6 +66,7 @@ jobs:
         -alias release -keyalg RSA -keysize 2048 -validity 10000 \
         -storepass android -keypass android \
         -dname "CN=Thazh Explore, OU=Mobile, O=Thazh, L=Vietnam, S=Vietnam, C=VN"
+        echo "Keystore created successfully"
         
     - name: Create gradle.properties
       run: |
@@ -68,28 +74,44 @@ jobs:
         echo "MYAPP_RELEASE_KEY_ALIAS=release" >> android/gradle.properties
         echo "MYAPP_RELEASE_STORE_PASSWORD=android" >> android/gradle.properties
         echo "MYAPP_RELEASE_KEY_PASSWORD=android" >> android/gradle.properties
+        echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
+        echo "android.useAndroidX=true" >> android/gradle.properties
+        echo "android.enableJetifier=true" >> android/gradle.properties
+        cat android/gradle.properties
         
     - name: Make gradlew executable
       run: chmod +x android/gradlew
-      
+
+    - name: Clean Gradle
+      working-directory: android
+      run: ./gradlew clean --no-daemon
+
     - name: Build APK
       working-directory: android
-      run: ./gradlew assembleRelease --no-daemon --stacktrace
-        
+      run: ./gradlew assembleRelease --no-daemon --stacktrace --info
+
+    - name: List build outputs
+      run: |
+        echo "Listing build outputs..."
+        find android/app/build/outputs -type f -name "*.apk"
+
     - name: Rename APK
       run: |
-        mv android/app/build/outputs/apk/release/app-release.apk \
-           android/app/build/outputs/apk/release/thazh-explore-${{ github.run_number }}.apk
+        mkdir -p artifacts
+        cp android/app/build/outputs/apk/release/app-release.apk \
+           artifacts/thazh-explore-v1.0.${{ github.run_number }}.apk
+        ls -lh artifacts/
         
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: thazh-explore-apk
-        path: android/app/build/outputs/apk/release/thazh-explore-${{ github.run_number }}.apk
+        path: artifacts/thazh-explore-v1.0.${{ github.run_number }}.apk
         retention-days: 30
-        
+        if-no-files-found: error
+
     - name: Create Release
-      if: github.ref == 'refs/heads/main'
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       uses: actions/create-release@v1
       id: create_release
       env:
@@ -103,26 +125,34 @@ jobs:
           ## Thazh Explore Browser v1.0.${{ github.run_number }}
           
           ### Features:
-          - Web browsing with WebView
-          - Safari-style interface
-          - Bookmark management
-          - Tab management
-          - Desktop mode toggle
-          - Default search: thazhsearch.wuaze.com
+          - ✨ Web browsing with WebView
+          - 🎨 Safari-style interface
+          - 📚 Bookmark management
+          - 📑 Tab management
+          - 🖥️ Desktop mode toggle
+          - 🔍 Default search: thazhsearch.wuaze.com
           
-          ### Changes in this release:
-          - Auto-built from commit ${{ github.sha }}
+          ### Build Information:
+          - **Commit**: ${{ github.sha }}
+          - **Branch**: ${{ github.ref_name }}
+          - **Build Number**: ${{ github.run_number }}
+          - **Built on**: ${{ github.event.head_commit.timestamp }}
           
-          ### Download:
-          Download the APK file from the assets below.
+          ### Installation:
+          1. Download the APK file from the assets below
+          2. Enable "Install from Unknown Sources" on your Android device
+          3. Install the APK
+          
+          ### Minimum Requirements:
+          - Android 5.0 (API 21) or higher
           
     - name: Upload Release Asset
-      if: github.ref == 'refs/heads/main'
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: android/app/build/outputs/apk/release/thazh-explore-${{ github.run_number }}.apk
+        asset_path: artifacts/thazh-explore-v1.0.${{ github.run_number }}.apk
         asset_name: thazh-explore-v1.0.${{ github.run_number }}.apk
         asset_content_type: application/vnd.android.package-archive
